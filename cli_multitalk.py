@@ -38,6 +38,7 @@ def parse_resolution(res: str) -> tuple[int, int]:
 
 
 def main():
+
     parser = argparse.ArgumentParser("Multitalk CLI - image + one/two audio → talking video")
     parser.add_argument("--image", required=True, help="Path to input image (1-2 persons)")
     parser.add_argument("--audio1", required=True, help="Audio file for person 1 (wav/mp3/mp4)")
@@ -53,8 +54,10 @@ def main():
     parser.add_argument("--fps", type=int, default=0, help="Override FPS (0 = use model defaults)")
     parser.add_argument("--seed", type=int, default=-1, help="Seed (-1 random)")
     parser.add_argument("--quant", default="int8", help="Model quantization preference (int8/bf16/fp16)")
-    parser.add_argument("--dtype", default="", help="Transformer dtype policy: '', fp16 or bf16")
+    parser.add_argument("--dtype", default="fp16", help="Transformer dtype policy: '', fp16 or bf16")
     parser.add_argument("--device", default="cuda", help="Torch device")
+    parser.add_argument("--memory-profile", type=int, default=-1, choices=[-1, 1, 2], help="Memory profile: -1=default, 1=HighRAM_HighVRAM, 2=HighRAM_LowVRAM")
+    parser.add_argument("--compile", action="store_true", help="Enable transformer compilation for faster inference")
     parser.add_argument("--speakers", default="", help="Optional speakers bboxes: 'L:R L:R' or 'L:T:R:B L:T:R:B' in %")
     parser.add_argument("--audio-combine", default="auto", choices=["auto","add","para"], help="Two-speaker audio combine mode")
 
@@ -96,6 +99,8 @@ def main():
         VAE_dtype=torch.float32,
         mixed_precision_transformer=False,
         save_quantized=False,
+        memory_profile=args.memory_profile,
+        compile_transformer=args.compile,
     )
 
     # Prepare multitalk audio embeddings

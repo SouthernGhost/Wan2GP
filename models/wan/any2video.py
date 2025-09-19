@@ -65,7 +65,7 @@ class WanAny2V:
         checkpoint_dir,
         model_filename = None,
         submodel_no_list = None,
-        model_type = None, 
+        model_type = None,
         model_def = None,
         base_model_type = None,
         text_encoder_filename = None,
@@ -73,7 +73,9 @@ class WanAny2V:
         save_quantized = False,
         dtype = torch.bfloat16,
         VAE_dtype = torch.float32,
-        mixed_precision_transformer = False
+        mixed_precision_transformer = False,
+        memory_profile = -1,
+        compile_transformer = False
     ):
         self.device = torch.device(f"cuda")
         self.config = config
@@ -168,10 +170,14 @@ class WanAny2V:
             self.model.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
             offload.change_dtype(self.model, dtype, True)
             self.model.eval().requires_grad_(False)
+            if compile_transformer:
+                self.model = torch.compile(self.model, mode="reduce-overhead")
         if self.model2 is not None:
             self.model2.lock_layers_dtypes(torch.float32 if mixed_precision_transformer else dtype)
             offload.change_dtype(self.model2, dtype, True)
             self.model2.eval().requires_grad_(False)
+            if compile_transformer:
+                self.model2 = torch.compile(self.model2, mode="reduce-overhead")
 
         if module_source is not None:
             save_model(self.model, model_type, dtype, None, is_module=True, filter=list(torch_load_file(module_source)), module_source_no=1)
