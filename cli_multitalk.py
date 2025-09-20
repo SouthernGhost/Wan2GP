@@ -9,13 +9,14 @@ from PIL import Image
 # Reuse repo utilities
 from wgp import (
     get_model_def,
-    get_model_filename,
     get_model_fps,
     get_model_min_frames_and_step,
     get_base_model_type,
+    load_models,
+    release_model,
+    server_config,
+    args as wgp_args,
 )
-from models.wan.wan_handler import family_handler as wan_family_handler
-from models.wan.any2video import WanAny2V
 from models.wan.multitalk.multitalk import (
     get_full_audio_embeddings,
     get_window_audio_embeddings,
@@ -56,9 +57,15 @@ def main():
     parser.add_argument("--quant", default="int8", help="Model quantization preference (int8/bf16/fp16)")
     parser.add_argument("--dtype", default="fp16", help="Transformer dtype policy: '', fp16 or bf16")
     parser.add_argument("--device", default="cuda", help="Torch device")
-    parser.add_argument("--memory-profile", type=int, default=-1, choices=[-1, 1, 2], help="Memory profile: -1=default, 1=HighRAM_HighVRAM, 2=HighRAM_LowVRAM")
+    parser.add_argument("--memory-profile", type=int, default=-1, choices=[-1, 1, 2, 3, 4, 5],
+                        help="Memory profile: -1=default, 1=HighRAM_HighVRAM, 2=HighRAM_LowVRAM, 3=LowRAM_HighVRAM, 4=LowRAM_LowVRAM, 5=VeryLowRAM_LowVRAM")
     parser.add_argument("--compile", action="store_true", help="Enable transformer compilation for faster inference")
-    parser.add_argument("--speakers", default="", help="Optional speakers bboxes: 'L:R L:R' or 'L:T:R:B L:T:R:B' in %")
+    parser.add_argument("--attention", default="auto", choices=["auto", "sdpa", "sage", "sage2", "flash", "xformers"],
+                        help="Attention mechanism: auto, sdpa, sage, sage2, flash, xformers")
+    parser.add_argument("--preload", type=int, default=0, help="Megabytes of model to preload in VRAM (0=auto)")
+    parser.add_argument("--vram-safety", type=float, default=0.8, help="VRAM safety coefficient (0.1-1.0)")
+    parser.add_argument("--reserved-mem", type=float, default=0.95, help="Max percentage of reserved memory (0.1-1.0)")
+    parser.add_argument("--speakers", default="", help="Optional speakers bboxes: 'L:R L:R' or 'L:T:R:B L:T:R:B' in percent")
     parser.add_argument("--audio-combine", default="auto", choices=["auto","add","para"], help="Two-speaker audio combine mode")
 
     args = parser.parse_args()
@@ -82,26 +89,33 @@ def main():
     frames = max(args.frames, frames_minimum)
     frames = (frames // frames_step) * frames_step + 1
 
-    # Load Wan Any2V with multitalk module via handler defaults
-    text_encoder_quantization = "int8"
-    cfg = __import__("models.wan.configs", fromlist=["WAN_CONFIGS"]).WAN_CONFIGS["i2v-14B"]
-    model_filename = get_model_filename(model_type, quantization=args.quant, dtype_policy=args.dtype)
-    wan_model = WanAny2V(
-        config=cfg,
-        checkpoint_dir="ckpts",
-        model_filename=model_filename,
-        model_type=model_type,
-        model_def=wan_family_handler.query_model_def(base_model_type, model_def),
-        base_model_type=base_model_type,
-        text_encoder_filename=wan_family_handler.get_wan_text_encoder_filename(text_encoder_quantization),
-        quantizeTransformer=(args.quant == "int8"),
-        dtype=(torch.float16 if args.dtype=="fp16" else torch.bfloat16),
-        VAE_dtype=torch.float32,
-        mixed_precision_transformer=False,
-        save_quantized=False,
-        memory_profile=args.memory_profile,
-        compile_transformer=args.compile,
-    )
+    # Configure wgp.py settings for advanced memory management
+    print(f"Configuring memory management...")
+    print(f"Memory profile: {args.memory_profile}")
+    print(f"Attention mode: {args.attention}")
+    print(f"VRAM preload: {args.preload}MB")
+    print(f"VRAM safety coefficient: {args.vram_safety}")
+    print(f"Reserved memory max: {args.reserved_mem}")
+
+    # Update wgp.py's global settings to match CLI arguments
+    wgp_args.preload = str(args.preload)
+    wgp_args.vram_safety_coefficient = args.vram_safety
+    wgp_args.perc_reserved_mem_max = args.reserved_mem
+    wgp_args.attention = args.attention
+    wgp_args.compile = args.compile
+
+    # Update server config for quantization and dtype
+    server_config["transformer_quantization"] = args.quant
+    server_config["transformer_dtype_policy"] = args.dtype
+    server_config["attention_mode"] = args.attention
+    if args.compile:
+        server_config["compile"] = "transformer"
+
+    # Use wgp.py's advanced model loading with memory management
+    print(f"Loading model with advanced memory management...")
+    wan_model, offloadobj = load_models(model_type, override_profile=args.memory_profile)
+    print(f"Model loaded successfully with profile {args.memory_profile}")
+    # offloadobj handles automatic memory management - no direct usage needed
 
     # Prepare multitalk audio embeddings
     combination = ("add" if args.audio_combine=="add" else "para" if args.audio_combine=="para" else ("para" if args.audio2 else "add"))
@@ -195,6 +209,14 @@ def main():
         os.replace(tmp_video, args.output)
 
     print(f"Saved: {args.output}")
+
+    # Clean up memory
+    print("Cleaning up memory...")
+    release_model()
+    import gc
+    gc.collect()
+    torch.cuda.empty_cache()
+    print("Memory cleanup complete.")
 
 
 if __name__ == "__main__":

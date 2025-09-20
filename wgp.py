@@ -1371,6 +1371,72 @@ def update_generation_status(html_content):
     if(html_content):
         return gr.update(value=html_content)
 
+def _initialize_args_dependent_globals():
+    """Initialize global variables that depend on args when running as main script"""
+    global advanced, transformer_dtype_policy, attention_mode, lock_ui_attention
+    global vae_config, transformer_type, lora_preselected_preset, compile, lock_ui_compile
+    global processing_device, force_profile_no, verbose_level, check_loras
+    global gpu_major, gpu_minor, bfloat16_supported, lora_preset_model
+
+    # Re-initialize GPU detection
+    gpu_major, gpu_minor = torch.cuda.get_device_capability(args.gpu if len(args.gpu) > 0 else None)
+    if  gpu_major < 8:
+        print("Switching to FP16 models when possible as GPU architecture doesn't support optimed BF16 Kernels")
+        bfloat16_supported = False
+    else:
+        bfloat16_supported = True
+
+    args.flow_reverse = True
+    processing_device = args.gpu
+    if len(processing_device) == 0:
+        processing_device ="cuda"
+
+    force_profile_no = int(args.profile)
+    verbose_level = int(args.verbose)
+    check_loras = args.check_loras ==1
+
+    # Update args-dependent configuration
+    if args.advanced:
+        advanced = True
+
+    if args.fp16:
+        transformer_dtype_policy = "fp16"
+    if args.bf16:
+        transformer_dtype_policy = "bf16"
+
+    if len(args.attention) > 0:
+        if args.attention in ["auto", "sdpa", "sage", "sage2", "flash", "xformers"]:
+            attention_mode = args.attention
+            lock_ui_attention = True
+        else:
+            raise Exception(f"Unknown attention mode '{args.attention}'")
+
+    if len(args.vae_config) > 0:
+        vae_config = int(args.vae_config)
+
+    # Model type selection
+    if args.t2v_14B or args.t2v:
+        transformer_type = "t2v"
+
+    if args.i2v_14B or args.i2v:
+        transformer_type = "i2v"
+
+    if args.t2v_1_3B:
+        transformer_type = "t2v_1.3B"
+
+    if args.i2v_1_3B:
+        transformer_type = "fun_inp_1.3B"
+
+    if args.vace_1_3B:
+        transformer_type = "vace_1.3B"
+
+    lora_preselected_preset = args.lora_preset
+    lora_preset_model = transformer_type
+
+    if args.compile:
+        compile = "transformer"
+        lock_ui_compile = True
+
 def _parse_args():
     parser = argparse.ArgumentParser(
         description="Generate a video from a text prompt or image using Gradio")
@@ -1745,9 +1811,58 @@ def get_lora_dir(model_type):
     else:
         raise Exception("loras unknown")
 
+# Default args class for when module is imported (not run directly)
+class DefaultArgs:
+    def __init__(self):
+        self.gpu = ""
+        self.profile = "0"
+        self.verbose = "0"
+        self.check_loras = False
+        self.advanced = False
+        self.fp16 = False
+        self.bf16 = False
+        self.attention = ""
+        self.vae_config = ""
+        self.t2v_14B = False
+        self.t2v = False
+        self.i2v_14B = False
+        self.i2v = False
+        self.t2v_1_3B = False
+        self.i2v_1_3B = False
+        self.vace_1_3B = False
+        self.lora_preset = ""
+        self.compile = False
+        self.seed = -1
+        self.frames = 0
+        self.steps = 0
+        self.settings = "settings"
+        self.preload = "0"
+        self.perc_reserved_mem_max = 0.95
+        self.vram_safety_coefficient = 0.8
+        self.lock_config = False
+        self.save_masks = False
+        self.save_speakers = False
+        self.lora_dir = ""
+        self.lora_dir_i2v = ""
+        self.lora_dir_hunyuan = "loras_hunyuan"
+        self.lora_dir_hunyuan_i2v = "loras_hunyuan_i2v"
+        self.lora_dir_ltxv = "loras_ltxv"
+        self.lora_dir_flux = "loras_flux"
+        self.lora_dir_qwen = "loras_qwen"
+        self.flow_reverse = True
+        self.debug_gen_form = False
+        self.theme = ""
+        self.lock_model = False
+        self.server_port = "7860"
+        self.server_name = ""
+        self.listen = False
+        self.open_browser = False
+        self.share = False
+        self.save_quantized = False
+
 attention_modes_installed = get_attention_modes()
 attention_modes_supported = get_supported_attention_modes()
-args = _parse_args()
+args = DefaultArgs()
 
 gpu_major, gpu_minor = torch.cuda.get_device_capability(args.gpu if len(args.gpu) > 0 else None)
 if  gpu_major < 8:
@@ -2296,7 +2411,6 @@ transformer_types = new_transformer_types
 transformer_type = server_config.get("last_model_type", None)
 advanced = server_config.get("last_advanced_choice", False)
 last_resolution = server_config.get("last_resolution_choice", None)
-if args.advanced: advanced = True 
 
 if transformer_type != None and not transformer_type in model_types and not transformer_type in models_def: transformer_type = None
 if transformer_type == None:
@@ -2304,27 +2418,16 @@ if transformer_type == None:
 
 transformer_quantization =server_config.get("transformer_quantization", "int8")
 
+# Initialize with defaults - will be overridden in main block if needed
 transformer_dtype_policy = server_config.get("transformer_dtype_policy", "")
-if args.fp16:
-    transformer_dtype_policy = "fp16" 
-if args.bf16:
-    transformer_dtype_policy = "bf16" 
 text_encoder_quantization =server_config.get("text_encoder_quantization", "int8")
 attention_mode = server_config["attention_mode"]
-if len(args.attention)> 0:
-    if args.attention in ["auto", "sdpa", "sage", "sage2", "flash", "xformers"]:
-        attention_mode = args.attention
-        lock_ui_attention = True
-    else:
-        raise Exception(f"Unknown attention mode '{args.attention}'")
 
 default_profile =  force_profile_no if force_profile_no >=0 else server_config["profile"]
 loaded_profile = -1
 compile = server_config.get("compile", "")
 boost = server_config.get("boost", 1)
 vae_config = server_config.get("vae_config", 0)
-if len(args.vae_config) > 0:
-    vae_config = int(args.vae_config)
 
 reload_needed = False
 save_path = server_config.get("save_path", os.path.join(os.getcwd(), "outputs"))
@@ -2332,31 +2435,11 @@ image_save_path = server_config.get("image_save_path", os.path.join(os.getcwd(),
 if not "video_output_codec" in server_config: server_config["video_output_codec"]= "libx264_8"
 if not "image_output_codec" in server_config: server_config["image_output_codec"]= "jpeg_95"
 
-preload_model_policy = server_config.get("preload_model_policy", []) 
-
-
-if args.t2v_14B or args.t2v: 
-    transformer_type = "t2v"
-
-if args.i2v_14B or args.i2v: 
-    transformer_type = "i2v"
-
-if args.t2v_1_3B:
-    transformer_type = "t2v_1.3B"
-
-if args.i2v_1_3B:
-    transformer_type = "fun_inp_1.3B"
-
-if args.vace_1_3B: 
-    transformer_type = "vace_1.3B"
+preload_model_policy = server_config.get("preload_model_policy", [])
 
 only_allow_edit_in_advanced = False
 lora_preselected_preset = args.lora_preset
 lora_preset_model = transformer_type
-
-if  args.compile: #args.fastest or
-    compile="transformer"
-    lock_ui_compile = True
 
 
 def save_model(model, model_type, dtype,  config_file,  submodel_no = 1,  is_module = False, filter = None, no_fp16_main_model = True, module_source_no = 1):
@@ -9644,6 +9727,12 @@ def create_ui():
         return main
 
 if __name__ == "__main__":
+    # Parse actual command line arguments when run as script
+    args = _parse_args()
+
+    # Initialize all args-dependent global variables
+    _initialize_args_dependent_globals()
+
     atexit.register(autosave_queue)
     download_ffmpeg()
     # threading.Thread(target=runner, daemon=True).start()
@@ -9657,13 +9746,13 @@ if __name__ == "__main__":
     if args.listen:
         server_name = "0.0.0.0"
     if len(server_name) == 0:
-        server_name = os.getenv("SERVER_NAME", "localhost")      
+        server_name = os.getenv("SERVER_NAME", "localhost")
     demo = create_ui()
     if args.open_browser:
-        import webbrowser 
+        import webbrowser
         if server_name.startswith("http"):
-            url = server_name 
+            url = server_name
         else:
-            url = "http://" + server_name 
+            url = "http://" + server_name
         webbrowser.open(url + ":" + str(server_port), new = 0, autoraise = True)
     demo.launch(favicon_path="favicon.png", server_name=server_name, server_port=server_port, share=args.share, allowed_paths=list({save_path, image_save_path}))
