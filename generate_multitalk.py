@@ -208,26 +208,26 @@ def create_generation_parameters(args, image, model_type):
         "force_fps": str(getattr(args, 'fps', 0)) if getattr(args, 'fps', 0) != 0 else "",
         
         # Inference parameters
-        "num_inference_steps": getattr(args, 'steps', 30),
-        "guidance_scale": getattr(args, 'guidance', 5.0),
-        "guidance2_scale": defaults.get("guidance2_scale", 5.0),
-        "guidance3_scale": defaults.get("guidance3_scale", 5.0),
-        "switch_threshold": defaults.get("switch_threshold", 0.5),
-        "switch_threshold2": defaults.get("switch_threshold2", 0.3),
-        "guidance_phases": defaults.get("guidance_phases", 1),
-        "model_switch_phase": defaults.get("model_switch_phase", 1),
-        "audio_guidance_scale": defaults.get("audio_guidance_scale", 4.0),
-        "flow_shift": defaults.get("flow_shift", 7.0),
-        "sample_solver": defaults.get("sample_solver", "euler"),
-        "embedded_guidance_scale": defaults.get("embedded_guidance_scale", 6.0),
+        "num_inference_steps": int(getattr(args, 'steps', 30)),
+        "guidance_scale": float(getattr(args, 'guidance', 5.0)),
+        "guidance2_scale": float(defaults.get("guidance2_scale", 5.0)),
+        "guidance3_scale": float(defaults.get("guidance3_scale", 5.0)),
+        "switch_threshold": float(defaults.get("switch_threshold", 0.5)),
+        "switch_threshold2": float(defaults.get("switch_threshold2", 0.3)),
+        "guidance_phases": int(defaults.get("guidance_phases", 1)),
+        "model_switch_phase": int(defaults.get("model_switch_phase", 1)),
+        "audio_guidance_scale": float(defaults.get("audio_guidance_scale", 4.0)),
+        "flow_shift": float(defaults.get("flow_shift", 7.0)),
+        "sample_solver": str(defaults.get("sample_solver", "euler")),
+        "embedded_guidance_scale": float(defaults.get("embedded_guidance_scale", 6.0)),
         
         # Generation control
-        "repeat_generation": 1,
-        "multi_prompts_gen_type": 0,
-        "multi_images_gen_type": 0,
-        "skip_steps_cache_type": "",
-        "skip_steps_multiplier": 1.5,
-        "skip_steps_start_step_perc": 20,
+        "repeat_generation": int(1),
+        "multi_prompts_gen_type": int(0),
+        "multi_images_gen_type": int(0),
+        "skip_steps_cache_type": str(""),
+        "skip_steps_multiplier": float(1.5),
+        "skip_steps_start_step_perc": float(20.0),
         
         # LoRA parameters
         "activated_loras": [],
@@ -305,6 +305,55 @@ def create_generation_parameters(args, image, model_type):
     }
     
     return params
+
+def find_and_move_generated_video(desired_output_path, seed, prompt):
+    """Find the generated video file and move it to the desired location."""
+    import glob
+    import shutil
+    from shared.utils.utils import truncate_for_filesystem
+    from wgp import sanitize_file_name
+
+    # Get the outputs directory (same as save_path in wgp.py)
+    outputs_dir = os.path.join(os.getcwd(), "outputs")
+
+    # Generate the expected filename pattern (same logic as in wgp.py lines 5442-5445)
+    if os.name == 'nt':
+        truncated_prompt = sanitize_file_name(truncate_for_filesystem(prompt, 50)).strip()
+    else:
+        truncated_prompt = sanitize_file_name(truncate_for_filesystem(prompt, 100)).strip()
+
+    # Look for files with the seed and prompt pattern
+    pattern = f"*_seed{seed}_{truncated_prompt}*.mp4"
+    search_pattern = os.path.join(outputs_dir, pattern)
+
+    # Find matching files
+    matching_files = glob.glob(search_pattern)
+
+    if not matching_files:
+        # Fallback: look for any recent .mp4 files with the seed
+        pattern = f"*_seed{seed}_*.mp4"
+        search_pattern = os.path.join(outputs_dir, pattern)
+        matching_files = glob.glob(search_pattern)
+
+    if not matching_files:
+        print(f"Could not find generated video with seed {seed} in {outputs_dir}")
+        return None
+
+    # Get the most recent file (in case there are multiple matches)
+    generated_file = max(matching_files, key=os.path.getctime)
+
+    # Create output directory if it doesn't exist
+    output_dir = os.path.dirname(desired_output_path)
+    if output_dir and not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+
+    # Move the file to the desired location
+    try:
+        shutil.move(generated_file, desired_output_path)
+        return desired_output_path
+    except Exception as e:
+        print(f"Error moving file from {generated_file} to {desired_output_path}: {e}")
+        return None
 
 def main():
     parser = argparse.ArgumentParser(
@@ -466,6 +515,10 @@ Examples:
         print(f"  - speakers_locations: {params['speakers_locations']}")
         print(f"  - clean_audio flag: {'V' in params['audio_prompt_type']}")
 
+        # Store the desired output path for later use
+        desired_output_path = os.path.abspath(args.output)
+        print(f"Desired output path: {desired_output_path}")
+
         # Call generate_video function with correct parameter names
         generate_video(
             task=task,
@@ -556,19 +609,30 @@ Examples:
             mode=params["mode"],
         )
 
-        print(f"\n=== Generation completed ===")
-        print(f"Output saved to: {args.output}")
+        print(f"\n=== Video generation completed successfully! ===")
 
-        # Check if the output file has audio
+        # Find the generated video file and move it to the desired location
         try:
-            import librosa
-            y, sr = librosa.load(args.output, sr=None)
-            if len(y) > 0:
-                print(f"✓ Output video contains audio (duration: {len(y)/sr:.2f}s, sample rate: {sr}Hz)")
+            generated_file = find_and_move_generated_video(desired_output_path, params['seed'], params['prompt'])
+            if generated_file:
+                print(f"✅ Video saved to: {generated_file}")
+
+                # Check if the output file has audio
+                try:
+                    import librosa
+                    y, sr = librosa.load(generated_file, sr=None)
+                    if len(y) > 0:
+                        print(f"✓ Output video contains audio (duration: {len(y)/sr:.2f}s, sample rate: {sr}Hz)")
+                    else:
+                        print("⚠ Output video appears to have no audio")
+                except Exception as audio_check_error:
+                    print(f"⚠ Could not check audio in output video: {audio_check_error}")
             else:
-                print("⚠ Output video appears to have no audio")
-        except Exception as audio_check_error:
-            print(f"⚠ Could not check audio in output video: {audio_check_error}")
+                print("⚠️  Generated video found in outputs folder, but could not be moved to specified location")
+                print("Check the outputs folder for your generated video")
+        except Exception as move_error:
+            print(f"⚠️  Video generated successfully but could not be moved: {move_error}")
+            print("Check the outputs folder for your generated video")
 
     except Exception as e:
         print(f"Error: {e}")
