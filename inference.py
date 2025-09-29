@@ -1,17 +1,16 @@
-#!/usr/bin/env python3
-"""
-Universal CLI script for video generation using the generate_video function from wgp.py.
-Supports multiple models including LTX Video, VACE, Multitalk, and their combinations.
-"""
-
 import os
 import sys
-import argparse
 import json
 import time
 import random
-from pathlib import Path
+import logging
+import argparse
 from PIL import Image
+from pathlib import Path
+
+from app.utils.logger import Logger
+
+wan_logger = Logger(logger_name="wan2gp", loglevel=logging.ERROR)
 
 # Import from wgp.py
 from wgp import (
@@ -130,20 +129,20 @@ def create_send_cmd_callback():
             if isinstance(data, list) and len(data) >= 2:
                 if len(data) == 3:
                     step, total_steps, status = data
-                    print(f"Progress: {step}/{total_steps} - {status}")
+                    wan_logger.info(f"Progress: {step}/{total_steps} - {status}")
                 else:  # [progress_value, status]
                     progress_value, status = data
-                    print(f"Status: {status}")
+                    wan_logger.info(f"Status: {status}")
             else:
-                print(f"Progress: {data}")
+                wan_logger.info(f"Progress: {data}")
         elif command == "status":
-            print(f"Status: {data}")
+            wan_logger.info(f"Status: {data}")
         elif command == "error":
-            print(f"Error: {data}")
+            wan_logger.error(f"Error: {data}")
         elif command == "output":
-            print("Generation step completed")
+            wan_logger.info("Generation step completed")
         else:
-            print(f"Command: {command}, Data: {data}")
+            wan_logger.info(f"Command: {command}, Data: {data}")
     
     return send_cmd
 
@@ -325,6 +324,7 @@ def validate_arguments(args, capabilities):
             errors.append("LTX Video frame count must be 17 + multiple of 8 (e.g., 17, 25, 33, 41, 49, 57, 65, 73, 81...)")
 
     if errors:
+        wan_logger.debug("Validation errors:\n" + "\n".join(f"  - {error}" for error in errors))
         raise ValueError("Validation errors:\n" + "\n".join(f"  - {error}" for error in errors))
 
 def create_generation_parameters(args, image, model_type, capabilities):
@@ -582,8 +582,8 @@ def show_model_info(model_name):
     """Show detailed information about a specific model."""
     models = get_available_models()
     if model_name not in models:
-        print(f"Model '{model_name}' not found.")
-        print(f"Available models: {', '.join(models.keys())}")
+        wan_logger.error(f"Model '{model_name}' not found.")
+        wan_logger.info(f"Available models: {', '.join(models.keys())}")
         return
 
     info = models[model_name]
@@ -632,36 +632,36 @@ def apply_performance_settings(args):
     # Apply transformer compilation setting
     if getattr(args, 'compile', False):
         server_config["compile"] = 1
-        print("✓ Transformer compilation enabled")
+        wan_logger.info("Transformer compilation enabled")
 
     # Apply quantization setting
     if hasattr(args, 'quant') and args.quant:
         server_config["transformer_quantization"] = args.quant
-        print(f"✓ Model quantization set to: {args.quant}")
+        wan_logger.info(f"Model quantization set to: {args.quant}")
 
     # Apply dtype policy
     if hasattr(args, 'dtype') and args.dtype:
         server_config["transformer_dtype_policy"] = args.dtype
-        print(f"✓ Transformer dtype policy set to: {args.dtype}")
+        wan_logger.info(f"Transformer dtype policy set to: {args.dtype}")
 
     # Apply attention mechanism
     if hasattr(args, 'attention') and args.attention != "auto":
         server_config["attention_mode"] = args.attention
-        print(f"✓ Attention mechanism set to: {args.attention}")
+        wan_logger.info(f"Attention mechanism set to: {args.attention}")
 
     # Apply VRAM settings
     if hasattr(args, 'vram_safety') and args.vram_safety != 0.8:
         server_config["vram_safety_coefficient"] = args.vram_safety
-        print(f"✓ VRAM safety coefficient set to: {args.vram_safety}")
+        wan_logger.info(f"VRAM safety coefficient set to: {args.vram_safety}")
 
     if hasattr(args, 'reserved_mem') and args.reserved_mem != 0.95:
         server_config["max_percentage_reserved_memory"] = args.reserved_mem
-        print(f"✓ Max reserved memory percentage set to: {args.reserved_mem}")
+        wan_logger.info(f"Max reserved memory percentage set to: {args.reserved_mem}")
 
     # Apply preload setting
     if hasattr(args, 'preload') and args.preload > 0:
         server_config["preload_model_policy"] = [args.preload]
-        print(f"✓ Model preload set to: {args.preload} MB")
+        wan_logger.info(f"Model preload set to: {args.preload} MB")
 
 def find_and_move_generated_video(desired_output_path, seed, prompt):
     """Find the generated video file and move it to the desired location."""
@@ -693,7 +693,7 @@ def find_and_move_generated_video(desired_output_path, seed, prompt):
         matching_files = glob.glob(search_pattern)
 
     if not matching_files:
-        print(f"Could not find generated video with seed {seed} in {outputs_dir}")
+        wan_logger.error(f"Could not find generated video with seed {seed} in {outputs_dir}")
         return None
 
     # Get the most recent file (in case there are multiple matches)
@@ -709,7 +709,7 @@ def find_and_move_generated_video(desired_output_path, seed, prompt):
         shutil.move(generated_file, desired_output_path)
         return desired_output_path
     except Exception as e:
-        print(f"Error moving file from {generated_file} to {desired_output_path}: {e}")
+        wan_logger.error(f"Error moving file from {generated_file} to {desired_output_path}: {e}")
         return None
 
 def main():
@@ -737,14 +737,13 @@ def main():
         parser.error(f"the following arguments are required: {', '.join('--' + arg for arg in missing_args)}")
 
     try:
-        print(f"=== Universal Video Generation CLI ===")
-        print(f"Model: {args.model}")
-        print(f"Output: {args.output}")
-        print(f"Frames: {args.frames}")
+        wan_logger.debug(f"Model: {args.model}")
+        wan_logger.debug(f"Output: {args.output}")
+        wan_logger.debug(f"Frames: {args.frames}")
 
         # Get model capabilities
         capabilities = get_model_capabilities(args.model)
-        print(f"Model Type: {capabilities.get('type', 'unknown')}")
+        wan_logger.debug(f"Model Type: {capabilities.get('type', 'unknown')}")
 
         # Validate arguments
         validate_arguments(args, capabilities)
@@ -752,27 +751,27 @@ def main():
         # Load image if provided
         image = None
         if args.image:
-            print(f"Loading image: {args.image}")
+            wan_logger.debug(f"Loading image: {args.image}")
             image = load_and_process_image(args.image)
-            print(f"Image loaded: {image.size}")
+            wan_logger.debug(f"Image loaded: {image.size}")
         elif capabilities.get("requires_image"):
             raise ValueError("This model requires an input image (--image)")
 
         # Set up model configuration
-        print("Setting up model configuration...")
+        #print("Setting up model configuration...")
         model_type, model_filename = setup_model_configuration(args)
-        print(f"Model type: {model_type}")
-        print(f"Model filename: {model_filename}")
+        wan_logger.debug(f"Model type: {model_type}")
+        wan_logger.debug(f"Model filename: {model_filename}")
 
         # Apply performance settings
         apply_performance_settings(args)
 
         # Create state object
-        print("Creating state object...")
+        wan_logger.debug("Creating state object...")
         state = create_state_object(model_type, model_filename)
 
         # Create generation parameters
-        print("Creating generation parameters...")
+        wan_logger.debug("Creating generation parameters...")
         params = create_generation_parameters(args, image, model_type, capabilities)
 
         # Create task object
@@ -787,37 +786,36 @@ def main():
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
 
-        print("\n=== Starting video generation ===")
-        print("This may take several minutes depending on your hardware...")
+        wan_logger.info("\nStarting video generation")
+        wan_logger.info("This may take several minutes depending on your hardware...")
 
         # Debug audio parameters if audio model
         if capabilities.get("supports_audio"):
-            print(f"Audio parameters:")
-            print(f"  - audio_guide: {params['audio_guide']}")
-            print(f"  - audio_guide2: {params['audio_guide2']}")
-            print(f"  - audio_prompt_type: {params['audio_prompt_type']}")
-            print(f"  - clean_audio flag: {'V' in params['audio_prompt_type']}")
+            wan_logger.debug("Audio parameters:")
+            wan_logger.debug(f"  - audio_guide: {params['audio_guide']}")
+            wan_logger.debug(f"  - audio_guide2: {params['audio_guide2']}")
+            wan_logger.debug(f"  - audio_prompt_type: {params['audio_prompt_type']}")
+            wan_logger.debug(f"  - clean_audio flag: {'V' in params['audio_prompt_type']}")
 
         # Debug VACE parameters if VACE model
         if capabilities.get("type") == "vace":
-            print(f"VACE parameters:")
-            print(f"  - video_prompt_type: {params['video_prompt_type']}")
-            print(f"  - reference_image_type: {getattr(args, 'reference_image_type', 'inject-people')}")
-            print(f"  - reference_images: {len(params['image_refs']) if params['image_refs'] else 0} images")
-            print(f"  - frame_positions: {params['frames_positions']}")
-            print(f"  - remove_background: {params['remove_background_images_ref']}")
+            wan_logger.debug("VACE parameters:")
+            wan_logger.debug(f"  - video_prompt_type: {params['video_prompt_type']}")
+            wan_logger.debug(f"  - reference_image_type: {getattr(args, 'reference_image_type', 'inject-people')}")
+            wan_logger.debug(f"  - reference_images: {len(params['image_refs']) if params['image_refs'] else 0} images")
+            wan_logger.debug(f"  - frame_positions: {params['frames_positions']}")
+            wan_logger.debug(f"  - remove_background: {params['remove_background_images_ref']}")
 
         # Debug performance parameters
-        print(f"Performance parameters:")
-        print(f"  - memory_profile: {getattr(args, 'memory_profile', -1)}")
-        print(f"  - compile: {getattr(args, 'compile', False)}")
-        print(f"  - quantization: {getattr(args, 'quant', 'int8')}")
-        print(f"  - dtype: {getattr(args, 'dtype', 'fp16')}")
-        print(f"  - attention: {getattr(args, 'attention', 'auto')}")
-
+        wan_logger.debug("Performance parameters:")
+        wan_logger.debug(f"  - memory_profile: {getattr(args, 'memory_profile', -1)}")
+        wan_logger.debug(f"  - compile: {getattr(args, 'compile', False)}")
+        wan_logger.debug(f"  - quantization: {getattr(args, 'quant', 'int8')}")
+        wan_logger.debug(f"  - dtype: {getattr(args, 'dtype', 'fp16')}")
+        wan_logger.debug(f"  - attention: {getattr(args, 'attention', 'auto')}")
         # Store the desired output path for later use
         desired_output_path = os.path.abspath(args.output)
-        print(f"Desired output path: {desired_output_path}")
+        wan_logger.debug(f"Wan2GP video output path: {desired_output_path}")
 
         # Call generate_video function with correct parameter names
         generate_video(
@@ -909,13 +907,12 @@ def main():
             mode="",
         )
 
-        print(f"\n=== Video generation completed successfully! ===")
+        wan_logger.info(f"\nVideo generation completed successfully")
 
-        # Find the generated video file and move it to the desired location
         try:
             generated_file = find_and_move_generated_video(desired_output_path, params['seed'], params['prompt'])
             if generated_file:
-                print(f"✅ Video saved to: {generated_file}")
+                wan_logger.info(f"Video saved to: {generated_file}")
 
                 # Check if the output file has audio (for audio models)
                 if capabilities.get("supports_audio") and args.audio1:
@@ -923,17 +920,17 @@ def main():
                         import librosa
                         y, sr = librosa.load(generated_file, sr=None)
                         if len(y) > 0:
-                            print(f"✓ Output video contains audio (duration: {len(y)/sr:.2f}s, sample rate: {sr}Hz)")
+                            wan_logger.info(f"Output video contains audio (duration: {len(y)/sr:.2f}s, sample rate: {sr}Hz)")
                         else:
-                            print("⚠ Output video appears to have no audio")
+                            wan_logger.warning("Output video appears to have no audio")
                     except Exception as audio_check_error:
-                        print(f"⚠ Could not check audio in output video: {audio_check_error}")
+                        wan_logger.warning(f"Could not check audio in output video: {audio_check_error}")
             else:
-                print("⚠️  Generated video found in outputs folder, but could not be moved to specified location")
-                print("Check the outputs folder for your generated video")
+                wan_logger.warning("Generated video found in outputs folder, but could not be moved to specified location")
+                wan_logger.warning("Check the outputs folder for your generated video")
         except Exception as move_error:
-            print(f"⚠️  Video generated successfully but could not be moved: {move_error}")
-            print("Check the outputs folder for your generated video")
+            wan_logger.warning(f"Video generated successfully but could not be moved: {move_error}")
+            wan_logger.warning("Check the outputs folder for your generated video")
 
         return 0
 
