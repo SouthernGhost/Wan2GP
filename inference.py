@@ -317,11 +317,6 @@ def validate_arguments(args, capabilities):
             if not getattr(args, 'frame_positions', None):
                 errors.append("--frame-positions is required when using --reference-image-type inject-frames")
 
-    # Check frame limits
-    max_frames = capabilities.get("max_frames", 257)
-    if args.frames > max_frames:
-        errors.append(f"Frame count ({args.frames}) exceeds maximum for this model ({max_frames})")
-
     # LTX Video specific validations
     if capabilities.get("type") == "ltxv":
         if args.frames < 17:
