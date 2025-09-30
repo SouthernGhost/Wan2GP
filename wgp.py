@@ -1381,7 +1381,7 @@ def _initialize_args_dependent_globals():
     # Re-initialize GPU detection
     gpu_major, gpu_minor = torch.cuda.get_device_capability(args.gpu if len(args.gpu) > 0 else None)
     if  gpu_major < 8:
-        print("Switching to FP16 models when possible as GPU architecture doesn't support optimed BF16 Kernels")
+        #print("Switching to FP16 models when possible as GPU architecture doesn't support optimed BF16 Kernels")
         bfloat16_supported = False
     else:
         bfloat16_supported = True
@@ -2952,9 +2952,11 @@ def load_models(model_type, override_profile = -1):
     transformer_type = None
     for module_type, filename in zip(module_type_list, local_model_file_list):
         if module_type is None:  
-            print(f"Loading Model '{filename}' ...")
+            #print(f"Loading Model '{filename}' ...")
+            pass
         else: 
-            print(f"Loading Module '{filename}' ...")
+            #print(f"Loading Module '{filename}' ...")
+            pass
 
     wan_model, pipe = model_types_handlers[base_model_type].load_model(
                 local_model_file_list, model_type, base_model_type, model_def, quantizeTransformer = quantizeTransformer, text_encoder_quantization = text_encoder_quantization,
