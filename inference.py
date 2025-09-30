@@ -78,7 +78,7 @@ def get_model_capabilities(model_name):
                 "supports_control": True,
                 "supports_reference_injection": True,
                 "supports_audio": True,
-                "max_frames": 257,
+                "max_frames": "257",
                 "default_fps": 25
             }
             
@@ -712,6 +712,68 @@ def find_and_move_generated_video(desired_output_path, seed, prompt):
         wan_logger.error(f"Error moving file from {generated_file} to {desired_output_path}: {e}")
         return None
 
+def generate_video_cli(task, send_cmd, state, model_type, model_filename, **params):
+    """
+    CLI-compatible wrapper for generate_video that properly handles sliding window generation.
+
+    This function implements the task processing logic that the web UI handles through
+    the process_tasks generator pattern, ensuring that all sliding windows are processed
+    when num_frames > sliding_window_size.
+    """
+    from shared.utils.thread_utils import AsyncStream, async_run
+
+    # Create async stream for communication
+    com_stream = AsyncStream()
+    internal_send_cmd = com_stream.output_queue.push
+
+    def generate_video_error_handler():
+        try:
+            generate_video(
+                task=task,
+                send_cmd=internal_send_cmd,
+                state=state,
+                model_type=model_type,
+                model_filename=model_filename,
+                mode="",
+                **params
+            )
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc().split('\n')[:-1]
+            print('\n'.join(tb))
+            internal_send_cmd("error", str(e))
+        finally:
+            internal_send_cmd("exit", None)
+
+    # Start the generation process asynchronously
+    async_run(generate_video_error_handler)
+
+    # Process commands from the generation function
+    while True:
+        cmd, data = com_stream.output_queue.next()
+
+        if cmd == "exit":
+            break
+        elif cmd == "error":
+            raise Exception(data)
+        elif cmd == "output":
+            # This is called after each window is completed
+            # For CLI, we just pass it through to the original send_cmd
+            send_cmd("output")
+        elif cmd == "progress":
+            send_cmd("progress", data)
+        elif cmd == "status":
+            send_cmd("status", data)
+        elif cmd == "info":
+            wan_logger.info(data)
+        elif cmd == "preview":
+            # CLI doesn't need preview handling, just ignore
+            pass
+        else:
+            wan_logger.warning(f"Unknown command received: {cmd}")
+
+    wan_logger.info("Video generation completed successfully")
+
 def main():
     """Main function."""
     parser = create_argument_parser()
@@ -817,10 +879,13 @@ def main():
         desired_output_path = os.path.abspath(args.output)
         wan_logger.debug(f"Wan2GP video output path: {desired_output_path}")
 
-        # Call generate_video function with correct parameter names
-        generate_video(
+        # Use CLI-compatible wrapper that properly handles sliding window generation
+        generate_video_cli(
             task=task,
             send_cmd=send_cmd,
+            state=state,
+            model_type=model_type,
+            model_filename=model_filename,
             image_mode=params["image_mode"],
             prompt=params["prompt"],
             negative_prompt=params["negative_prompt"],
@@ -901,13 +966,7 @@ def main():
             prompt_enhancer=params["prompt_enhancer"],
             min_frames_if_references=params["min_frames_if_references"],
             override_profile=params["override_profile"],
-            state=state,
-            model_type=model_type,
-            model_filename=model_filename,
-            mode="",
         )
-
-        wan_logger.info(f"\nVideo generation completed successfully")
 
         try:
             generated_file = find_and_move_generated_video(desired_output_path, params['seed'], params['prompt'])
