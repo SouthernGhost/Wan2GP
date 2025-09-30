@@ -43,4 +43,4 @@ loras/
 loras_i2v/
 settings/
 wgp_config.json
-*.md
+generate_video_args.md
